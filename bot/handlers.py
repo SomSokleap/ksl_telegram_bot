@@ -1,122 +1,106 @@
+import os
+import random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from utils.dataset_loader import get_all_classes, get_sample_video
-from bot.keyboard import build_class_keyboard
-
-CLASSES = get_all_classes()
+DATASET_PATH = "dataset"
 
 
-# ===================== START =====================
+# Load classes
+def get_classes():
+    return sorted(os.listdir(DATASET_PATH))
+
+
+# Get random video from class
+def get_random_video(class_name):
+    class_path = os.path.join(DATASET_PATH, class_name)
+    videos = [v for v in os.listdir(class_path) if v.endswith(".mp4")]
+    return os.path.join(class_path, random.choice(videos))
+
+
+# START COMMAND
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("📚 Browse Classes", callback_data="browse")],
-        [InlineKeyboardButton("🔍 Search", callback_data="search")],
-    ]
+    classes = get_classes()
+
+    keyboard = []
+    for cls in classes:
+        keyboard.append([InlineKeyboardButton(cls, callback_data=f"class|{cls}")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        "🇰🇭 Khmer Sign Language Bot\n\nChoose an option:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "📚 Choose a class:",
+        reply_markup=reply_markup
     )
 
 
-# ===================== CALLBACK =====================
+# HANDLE BUTTONS
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    data = query.data
+    data = query.data.split("|")
 
-    # ---------- HOME ----------
-    if data == "home":
-        keyboard = [
-            [InlineKeyboardButton("📚 Browse Classes", callback_data="browse")],
-            [InlineKeyboardButton("🔍 Search", callback_data="search")],
-        ]
+    # 👉 SELECT CLASS
+    if data[0] == "class":
+        class_name = data[1]
 
-        await query.message.edit_text(
-            "🇰🇭 Khmer Sign Language Bot\n\nChoose an option:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        # save class in memory
+        context.user_data["class"] = class_name
 
-    # ---------- BROWSE ----------
-    elif data == "browse":
-        keyboard = build_class_keyboard(CLASSES)
-
-        await query.message.edit_text(
-            "📚 Select a class:",
-            reply_markup=keyboard
-        )
-
-    # ---------- PAGINATION ----------
-    elif data.startswith("page:"):
-        page = int(data.split(":")[1])
-        keyboard = build_class_keyboard(CLASSES, page=page)
-
-        await query.message.edit_reply_markup(reply_markup=keyboard)
-
-    # ---------- CLASS ----------
-    elif data.startswith("class:"):
-        class_name = data.split(":")[1]
-
-        video_path = get_sample_video(class_name)
+        video_path = get_random_video(class_name)
 
         keyboard = [
             [
-                InlineKeyboardButton("🔁 Next", callback_data=f"class:{class_name}"),
-                InlineKeyboardButton("📂 More", callback_data=f"more:{class_name}")
-            ],
-            [
-                InlineKeyboardButton("⬅️ Back", callback_data="browse"),
-                InlineKeyboardButton("🏠 Home", callback_data="home")
+                InlineKeyboardButton("🔁 Next", callback_data="next"),
+                InlineKeyboardButton("⬅️ Back", callback_data="back")
             ]
         ]
 
-        # ✅ FIX: keep navigation working
-        await query.message.edit_text(
-            text=f"📂 Class: {class_name}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.message.reply_video(
+            video=open(video_path, "rb"),
+            caption=f"Class: {class_name}",
+            reply_markup=reply_markup
         )
 
-        # ✅ Send video separately
-        if video_path:
-            await query.message.reply_document(
-                document=open(video_path, "rb")
-            )
-        else:
-            await query.message.reply_text("⚠️ No video found.")
+    # 👉 NEXT VIDEO
+    elif data[0] == "next":
+        class_name = context.user_data.get("class")
 
-    # ---------- MORE ----------
-    elif data.startswith("more:"):
-        class_name = data.split(":")[1]
+        if not class_name:
+            await query.message.reply_text("⚠️ No class selected")
+            return
 
-        for _ in range(3):
-            video_path = get_sample_video(class_name)
-            if video_path:
-                await query.message.reply_document(
-                    document=open(video_path, "rb")
-                )
+        video_path = get_random_video(class_name)
 
-    # ---------- SEARCH ----------
-    elif data == "search":
-        await query.message.reply_text("🔍 Type class name:")
-        context.user_data["search_mode"] = True
+        keyboard = [
+            [
+                InlineKeyboardButton("🔁 Next", callback_data="next"),
+                InlineKeyboardButton("⬅️ Back", callback_data="back")
+            ]
+        ]
 
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
-# ===================== TEXT =====================
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("search_mode"):
-        query_text = update.message.text.lower()
+        await query.message.reply_video(
+            video=open(video_path, "rb"),
+            caption=f"Class: {class_name}",
+            reply_markup=reply_markup
+        )
 
-        results = [c for c in CLASSES if query_text in c.lower()]
+    # 👉 BACK TO MENU
+    elif data[0] == "back":
+        classes = get_classes()
 
-        if results:
-            keyboard = build_class_keyboard(results)
-            await update.message.reply_text(
-                "Results:",
-                reply_markup=keyboard
-            )
-        else:
-            await update.message.reply_text("❌ No match found.")
+        keyboard = []
+        for cls in classes:
+            keyboard.append([InlineKeyboardButton(cls, callback_data=f"class|{cls}")])
 
-        context.user_data["search_mode"] = False
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.message.reply_text(
+            "📚 Choose a class:",
+            reply_markup=reply_markup
+        )
